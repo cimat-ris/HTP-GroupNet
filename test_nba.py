@@ -148,7 +148,18 @@ def test_model_all(test_loader, args):
     l2error_dest_36s = 0
 
     for data in test_loader:
+        
+        '''
+            data is a dictionary:
+            
+            keys:
+                past_traj         >>>  torch tensor (128,11,5,2)
+                future_traj       >>>  torch tensor (128,11,10,2)
+                seq               >>>  str: dataset
+                
+        '''
         future_traj = np.array(data['future_traj']) * args.traj_scale # B,N,T,2
+        print(future_traj.shape)
         with torch.no_grad():
             prediction = model.inference(data)
         prediction = prediction * args.traj_scale

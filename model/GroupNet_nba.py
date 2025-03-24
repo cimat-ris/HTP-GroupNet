@@ -476,28 +476,64 @@ class GroupNet(nn.Module):
         
         past_traj = data['past_traj'].view(batch_size*agent_num,self.args.past_length,2).to(device).contiguous()
         future_traj = data['future_traj'].view(batch_size*agent_num,self.args.future_length,2).to(device).contiguous()
+        
+        
+        '''
+        For nba data set agent_num is constant and equal to 11.
+        
+        past_traj      >>>   (32x11, 5, 2)  
+        future_traj    >>>   (32x11, 10, 2)
+        
+        '''
 
         past_vel = past_traj[:,1:] - past_traj[:,:-1, :]
         past_vel = torch.cat([past_vel[:,[0]], past_vel], dim=1)
 
         future_vel = future_traj - torch.cat([past_traj[:,[-1]], future_traj[:,:-1, :]],dim=1)
         cur_location = past_traj[:,[-1]]
+        
+        '''
+            past_vel       >>>  (batch_size x num_agents = 32x11, past_frames = 5, vx,vy = 2)
+            future_vel     >>>  (32x11, future_frames = 10, 2)
+            cur_location   >>>  (32x11, last_position = 1dim, 2)
+            
+        '''
 
         inputs = torch.cat((past_traj,past_vel),dim=-1)
         inputs_for_posterior = torch.cat((future_traj,future_vel),dim=-1)
-
+        
+        '''
+            inputs                  >>>  (32x11, 5, x,y,vx,vy = 4)
+            inputs_for_posterior    >>>  (32x11, 10, 4)
+        
+        '''
+        
         past_feature = self.past_encoder(inputs,batch_size,agent_num)
         qz_param = self.future_encoder(inputs_for_posterior,batch_size,agent_num,past_feature)
+        
+        '''
+            the past encoder extracts the principal features from input wich 
+            is a concatanation of the trajectories plus the velocities
+            
+            past_feature         >>>   (batch_size x num_agents = 32x11, 256) 
+            
+            the future encoder do the same 
+            
+            qz_param             >>>   (batch_size x num_agents = 32x11, 64)
+        
+        '''
 
         ### q dist ###
         if self.args.ztype == 'gaussian':
-            qz_distribution = Normal(params=qz_param)
+            # gaussian distribution of the future decodification
+            qz_distribution = Normal(params=qz_param)  
         else:
             ValueError('Unknown hidden distribution!')
         qz_sampled = qz_distribution.rsample()
 
         ### p dist ###
         if self.args.learn_prior:
+            # gaussian distribution of the past decodification
             pz_param = self.pz_layer(past_feature)
             if self.args.ztype == 'gaussian':
                 pz_distribution = Normal(params=pz_param)
@@ -514,8 +550,14 @@ class GroupNet(nn.Module):
         ### use q ###
         # z = qz_sampled
         pred_traj,recover_traj = self.decoder(past_feature,qz_sampled,batch_size,agent_num,past_traj,cur_location,sample_num=1)
+        
+        '''
+            pred_traj       >>>  (352, 10, 2)    future
+            recover_traj    >>>  (352, 5, 2)     past reconstruction
+        '''
+        
+        # Calculating some lost
         loss_pred = self.calculate_loss_pred(pred_traj,future_traj,batch_size)
-
         loss_recover = self.calculate_loss_recover(recover_traj,past_traj,batch_size)
         loss_kl = self.calculate_loss_kl(qz_distribution,pz_distribution,batch_size,agent_num,self.args.min_clip)
         
@@ -538,9 +580,13 @@ class GroupNet(nn.Module):
                 ValueError('Unknown hidden distribution!')
 
         pz_sampled = pz_distribution.rsample()
+        # pz_sampled   >>> (sample_num x batch_size x num_agents = 20x32x11 = 7040, zdim = 32)
         # z = pz_sampled
 
         diverse_pred_traj,_ = self.decoder(past_feature_repeat,pz_sampled,batch_size,agent_num,past_traj,cur_location,sample_num=20,mode='inference')
+        
+        #  diverse_pred_traj   >>> [352, 20, 10, 2]) 
+        
         loss_diverse = self.calculate_loss_diverse(diverse_pred_traj,future_traj,batch_size)
         total_loss = loss_pred + loss_recover + loss_kl+ loss_diverse
 
@@ -552,8 +598,8 @@ class GroupNet(nn.Module):
 
     def inference(self, data):
         device = self.device
-        batch_size = data['past_traj'].shape[0]
-        agent_num = data['past_traj'].shape[1]
+        batch_size = data['past_traj'].shape[0]   # 128
+        agent_num = data['past_traj'].shape[1]    # 11
         
         past_traj = data['past_traj'].view(batch_size*agent_num,self.args.past_length,2).to(device).contiguous()
 
@@ -587,4 +633,10 @@ class GroupNet(nn.Module):
 
         diverse_pred_traj,_ = self.decoder(past_feature_repeat,z,batch_size,agent_num,past_traj,cur_location,sample_num=self.args.sample_k,mode='inference')
         diverse_pred_traj = diverse_pred_traj.permute(1,0,2,3)
+        
+        '''
+            diverse_pred_traj    >>>  (samples = 20, batch_size x num_agents = 128x11, future_frames = 10, x & y = 2)   
+        '''
+       
+        
         return diverse_pred_traj
